@@ -18,7 +18,7 @@ The Rome II version of the [Shogun 2 8-player co-op mod](https://github.com/Tasm
 **Steam Workshop page** (the 8-slot lobby only; the full mod is the download below): https://steamcommunity.com/sharedfiles/filedetails/?id=3827019251
 
 ## Community
-Join the **Tasman Modding Discord** for help, finding players, bug reports and updates: https://discord.gg/medh2d8nk
+Join the **Tasman Modding Discord** for help, finding players, bug reports and updates: https://discord.gg/vt4JbH79Np
 
 ## Install / uninstall
 1. Everyone closes Rome II.
@@ -27,7 +27,7 @@ Join the **Tasman Modding Discord** for help, finding players, bug reports and u
 3. Start Rome II from Steam. If the launcher warns about an "out-of-date mod", click **Ignore this warning** ("Disable" would turn the 8-slot lobby off).
 4. Host a multiplayer campaign: **Multiplayer > Campaign > Host Campaign**.
 
-**Updating:** every new version is published on [GitHub](https://github.com/TasmanModding/Rome2-8Player-Coop/releases/latest). Steam Workshop can only share `.pack` files, so it can't update the engine part of the mod for you. Download the newest zip, unzip it and run `Install.bat`: it replaces the old version. New versions are announced in the [Discord](https://discord.gg/medh2d8nk). Update together with your friends, since everyone needs the same version.
+**Updating:** every new version is published on [GitHub](https://github.com/TasmanModding/Rome2-8Player-Coop/releases/latest). Steam Workshop can only share `.pack` files, so it can't update the engine part of the mod for you. Download the newest zip, unzip it and run `Install.bat`: it replaces the old version. New versions are announced in the [Discord](https://discord.gg/vt4JbH79Np). Update together with your friends, since everyone needs the same version.
 
 **`Uninstall.bat`** puts everything back. Steam's "Verify integrity of game files" also restores the original DLL.
 
@@ -72,7 +72,7 @@ Please report the step where it breaks, what you saw, and the newest `.mdmp` fro
 
 **Fixed in v1.1:** the host's panel and the campaign map were missing in the 8-slot lobby; players now fill the slots in order (the host was put in slot 7); invite buttons on every empty slot.
 
-If something goes wrong, report it in the [Discord](https://discord.gg/medh2d8nk), [open an issue](https://github.com/TasmanModding/Rome2-8Player-Coop/issues/new?template=crash_report.md) or comment on the [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3827019251), with: how many players, co-op or head-to-head, who was in the battle, what happened on whose screen and when, your MATCH CODE, and the newest `.mdmp` file from `%APPDATA%\The Creative Assembly\Rome2\crash_report`.
+If something goes wrong, report it in the [Discord](https://discord.gg/vt4JbH79Np), [open an issue](https://github.com/TasmanModding/Rome2-8Player-Coop/issues/new?template=crash_report.md) or comment on the [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3827019251), with: how many players, co-op or head-to-head, who was in the battle, what happened on whose screen and when, your MATCH CODE, and the newest `.mdmp` file from `%APPDATA%\The Creative Assembly\Rome2\crash_report`.
 
 ## Known limitations - please report what you see
 The game was built for 2 players, so with 3–8 players some parts haven't been tested in real games yet:
