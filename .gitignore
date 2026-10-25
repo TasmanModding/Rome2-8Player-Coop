@@ -1,0 +1,6 @@
+re/
+pack_src/
+*.dll
+*.pack
+*.zip
+*.mdmp
