@@ -59,6 +59,27 @@ Verified by a byte-exact round trip of ui\frontend ui\mp_grand_campaign (other l
   threads, stacks, modules) at 100ECD9F. The crash_report .stack.txt it also writes only says "unknown"; the .mdmp
   stack walk (faulting thread's stack -> empire.retail.dll return addresses) is what locates a crash.
 
+- 3+ humans, players not in a battle: FUN_107508c0 (pending battle; faction) = Shogun 2's FUN_105cefa0. Counts human
+  records (vector at [[[pb+28h]+58h]+0EE0h]+80h, +10h count, +14h data, 38h each, flag +0Ch): exactly 2 -> follow the
+  human in the battle (FUN_1014c9b0(alliance, army, 0, 1)); otherwise FUN_1014c9b0(0, 0, 1, 0) (plain spectator), the
+  path that closed Shogun 2. 107509DC jne -> jb; 107509B0 (play-as-AI votes, humans != 2) -> follow loop 107509FC;
+  107509F6 je removed (votes == humans and play-as-AI: dead with 2 humans, reachable with 3+).
+- Play-as-AI test inlined 4x (Shogun 2's FUN_105cbb50): pending battle +0ECh vote count, +0F0h votes (20h each,
+  choice +0Ch: 1 fight, 4 play as AI): count == 2 && votes[1] == 4 && votes[0] == 1. Sites 1074AF17 (FUN_1074aed0),
+  1074DA56 (FUN_1074d040, battle setup: humans == 2 hands the AI army over), 10750997 (FUN_107508c0), 107520C8.
+  Left as is: with 3+ humans nobody gets the AI army.
+- Side lookup FUN_1074aed0 (pending battle; faction, bool*) -> side or null (FUN_1074ae60 on [pb+48h] then [pb+4Ch],
+  then a fallback over [pb+68h]). 44 callers; 5 read [side+4] unchecked: 1074A5A2 / 1074A5EB (FUN_1074a580 = Shogun 2's
+  FUN_105b50b0, the H2H crash: AV read 4), 110F0D76 (autoresolve), 1110FB07 / 1110FB7F (spectate / play as AI
+  buttons, FUN_1110fab0). All go through a stub: [side+4], or the faction when null.
+- Checked, no fix needed: quit battle (EMPIRE_MP::quit_battle, 10FC330F) has no player-count disconnect (Shogun 2's
+  10F1F91E); save name FUN_106c3fc0 reads players 0/1 of a growing vector (2 names, no overrun).
+- Crash report: the 100ECDA7 MiniDumpWriteDump call goes through a stub (crashing thread, MINIDUMP_EXCEPTION_INFORMATION
+  arg 5) that writes text to eightplayer_crash.txt (working folder = game folder) and passes it as a CommentStreamA
+  (type 10) user stream. Call stack = every stack dword in .text or .r8p, rebased to image base 10000000; stack read
+  only when ctx.Esp is inside [fs:8, fs:4). Tested outside the game: lib loaded with DONT_RESOLVE_DLL_REFERENCES,
+  four IAT slots pointed at the real functions, fake access violation -> 477 KB dump with the comment stream.
+
 ## Not done / next
 - In-campaign behaviour with 3+ humans is untested: co-op alliances between all humans, battle results for
   allies who weren't in the battle, desync handling (handler near 10FD5700 / 10FB5890, kick setting mp_desync_kick_enabled).

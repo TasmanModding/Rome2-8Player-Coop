@@ -13,6 +13,9 @@
 //   6. Kick click: kicked the first non-host player whatever button was pressed; now kicks the player whose panel
 //      holds the clicked button.
 //   7. Crash dumps: the game's crash handler writes a small minidump (threads, stacks, modules) instead of ~68 MB.
+//   8. Battles with 3+ humans: players not in a battle follow it; a faction with no side in a battle no longer crashes.
+//   9. Crash report: readable text (exception, registers, call stack as original addresses) in the .mdmp and in
+//      eightplayer_crash.txt.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -471,6 +474,283 @@ public static class EightPlayerPatcher {
 		return at;
 	}
 
+	// ---- 14. players not in a battle, 3+ humans ---------------------------------------------------------------------
+	// FUN_107508c0 (pending battle; faction) sets up a battle for a faction that isn't in it. It counts the human factions:
+	// exactly 2 -> follow the human who is in the battle (his alliance and army); any other count -> plain spectator of
+	// alliance 0 / army 0, a path 2-player campaigns never reach. The same function in Shogun 2 (FUN_105cefa0) closed the
+	// game on that path with 3+ players. Now 2 or more humans follow the battle:
+	//   107509DC  humans != 2 -> plain spectator           => humans < 2
+	//   107509B0  "play as AI" votes, humans != 2 -> plain  => follow the battle (the AI army only goes to a player with 2 humans)
+	//   107509F6  votes == humans and "play as AI" -> plain: unreachable with 2 humans (handled above), reachable with 3+ => removed
+	const uint FollowHumanCount = 0x107509DC;
+	const uint FollowPlayAsAi = 0x107509B0;
+	const uint FollowVotesEqual = 0x107509F6;
+	const uint FollowLoop = 0x107509FC;
+
+	static void PatchFollowBattle() {
+		ExpectBytes(FollowHumanCount - 3, 0x83, 0xF9, 0x02, 0x0F, 0x85, 0xCA, 0x00, 0x00, 0x00);
+		b[VaToOff(FollowHumanCount) + 1] = 0x82;                      // jne -> jb
+		ExpectBytes(FollowPlayAsAi - 2, 0x3B, 0xCF, 0x0F, 0x85, 0xF6, 0x00, 0x00, 0x00);
+		Array.Copy(BitConverter.GetBytes((int)(FollowLoop - (FollowPlayAsAi + 6))), 0, b, VaToOff(FollowPlayAsAi) + 2, 4);
+		ExpectBytes(FollowVotesEqual, 0x0F, 0x84, 0xB0, 0x00, 0x00, 0x00);
+		for (int i = 0; i < 6; i++) b[VaToOff(FollowVotesEqual) + i] = 0x90;
+	}
+
+	// ---- 15. "my side" for a faction that isn't in the battle (head-to-head crash) ---------------------------------
+	// FUN_1074aed0 (pending battle; faction, bool*) returns the faction's side in the battle, or null when it has none.
+	// Five callers read [side+4] (the side's faction) without checking. With 2 players every human is in the battle or
+	// is the other human's ally; with 3+ in head-to-head a human can be in neither side, and the game read address 4.
+	// FUN_1074a580 is Shogun 2's FUN_105b50b0, whose crash dumps showed exactly that. The callers now call SideFaction:
+	// [side+4], or the faction itself when it has no side (as the Shogun 2 fix).
+	const uint SideLookup = 0x1074AED0;
+	const uint SideCallCoopTeam = 0x1074A5A2;     // call / push ebx / push [eax+4]  -> call / push ebx / push eax / nop nop
+	const uint SideCallCoopTeam2 = 0x1074A5EB;    // call / pop edi / pop esi / pop ebp / mov eax,[eax+4]
+	static readonly uint[] SideCallsUi = { 0x110F0D76, 0x1110FB07, 0x1110FB7F };   // call / mov ecx,[13FFBE90] / mov eax,[eax+4]
+
+	static uint EmitSideFaction(Asm a) {
+		uint at = a.Here;
+		a.Raw(0xFF, 0x74, 0x24, 0x08);                    // push dword ptr [esp+8]  (bool*)
+		a.Raw(0xFF, 0x74, 0x24, 0x08);                    // push dword ptr [esp+8]  (faction)
+		a.Call(SideLookup);                               // ecx = pending battle, as the caller set it
+		a.Raw(0x85, 0xC0);                                // test eax,eax
+		a.J8(0x74, "none");
+		a.Raw(0x8B, 0x40, 0x04);                          // mov eax,[eax+4]
+		a.Raw(0xC2, 0x08, 0x00);                          // ret 8
+		a.Mark("none");
+		a.Raw(0x8B, 0x44, 0x24, 0x04);                    // mov eax,[esp+4]         (the faction)
+		a.Raw(0xC2, 0x08, 0x00);                          // ret 8
+		a.Resolve();
+		return at;
+	}
+
+	static void PatchSideCalls(uint stub) {
+		RedirectCall(SideCallCoopTeam, SideLookup, stub);
+		ExpectBytes(SideCallCoopTeam + 5, 0x53, 0xFF, 0x70, 0x04);
+		Array.Copy(new byte[] { 0x53, 0x50, 0x90, 0x90 }, 0, b, VaToOff(SideCallCoopTeam + 5), 4);
+		RedirectCall(SideCallCoopTeam2, SideLookup, stub);
+		ExpectBytes(SideCallCoopTeam2 + 5, 0x5F, 0x5E, 0x5D, 0x8B, 0x40, 0x04);
+		for (int i = 8; i < 11; i++) b[VaToOff(SideCallCoopTeam2) + i] = 0x90;
+		foreach (uint c in SideCallsUi) {
+			RedirectCall(c, SideLookup, stub);
+			ExpectBytes(c + 5, 0x8B, 0x0D, 0x90, 0xBE, 0xFF, 0x13, 0x8B, 0x40, 0x04);
+			for (int i = 11; i < 14; i++) b[VaToOff(c) + i] = 0x90;
+		}
+	}
+
+	// ---- 16. crash report ---------------------------------------------------------------------------------------------
+	// The game's crash handler (FUN_100ECC80, on the crashing thread) calls MiniDumpWriteDump at 100ECDA7. That call now
+	// goes through CrashReport, which writes a readable report and passes the same text to MiniDumpWriteDump as a comment
+	// stream, so the .mdmp in crash_report carries it too. The report: mod version, exception code and address, the
+	// access type and address for access violations, registers, the call stack (every return address into this DLL's code
+	// found on the stack, as ORIGINAL addresses: image base 10000000, the addresses in NOTES.md and Ghidra) and the top of
+	// the raw stack. A copy is written to eightplayer_crash.txt in the game folder.
+	public const string Version = "1.3";
+	const uint MiniDumpCall = 0x100ECDA7;         // call 116AA80B (MiniDumpWriteDump thunk), 7 args, stdcall
+	const uint MiniDumpThunk = 0x116AA80B;
+	const uint CreateFileAIat = 0x117751CC;
+	const uint WriteFileIat = 0x11775320;
+	const uint CloseHandleIat = 0x11775304;
+
+	static void Imm(Asm a, uint v) { a.Bytes.AddRange(BitConverter.GetBytes(v)); }
+	// op [ebp+disp32] with the given reg field (modrm 10 reg 101)
+	static void Ebp(Asm a, byte op, int reg, int disp) { a.Raw(op, (byte)(0x85 | (reg << 3))); Imm(a, (uint)disp); }
+
+	// locals (below ebp)
+	const int RBuf = -0x1800, RLen = -0x1804, RWritten = -0x1808, REp = -0x180C;
+	const int RStream = -0x1818, RStreamInfo = -0x1820, RBase = -0x1824, RStack = -0x1828, RAvail = -0x182C, RFound = -0x1830;
+
+	static uint EmitCrashReport(Asm a, uint textStart, uint textEnd, uint modStart) {
+		var str = new Dictionary<string, uint>();
+		Action<string, string> addStr = (key, text) => { str[key] = a.Here; a.Bytes.AddRange(Encoding.ASCII.GetBytes(text)); a.Raw(0); };
+		addStr("head", "Rome II 8-player co-op mod v" + Version + " crash report\r\n");
+		addStr("code", "exception ");
+		addStr("at", " at ");
+		addStr("dll", " (empire.retail.dll)");
+		addStr("other", " (another module: see the .mdmp)");
+		addStr("info", "\r\nflags ");
+		addStr("params", "  details (access violation: count, 0 read / 1 write / 8 execute, address) ");
+		addStr("sp", " ");
+		addStr("nl", "\r\n");
+		addStr("base", "\r\nempire.retail.dll loaded at ");
+		addStr("orig", "; addresses marked (empire.retail.dll) and the call stack are original addresses (image base 10000000)");
+		addStr("noep", "no exception information\r\n");
+		var regs = new[] { "eip", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp" };
+		var regOff = new uint[] { 0xB8, 0xB0, 0xA4, 0xAC, 0xA8, 0xA0, 0x9C, 0xB4, 0xC4 };
+		foreach (var r in regs) addStr(r, (r == "eip" ? "\r\n" : " ") + r + " ");
+		addStr("calls", "\r\ncall stack (return addresses into empire.retail.dll found on the stack, newest first):");
+		addStr("stack", "\r\nstack:");
+		addStr("file", "eightplayer_crash.txt");
+
+		// hex8: eax -> 8 hex digits at [edi], edi advanced; keeps ecx/edx
+		uint hex8 = a.Here;
+		a.Raw(0x51, 0x52, 0xB9, 0x08, 0x00, 0x00, 0x00);  // push ecx / push edx / mov ecx,8
+		a.Mark("hx");
+		a.Raw(0xC1, 0xC0, 0x04);                          // rol eax,4
+		a.Raw(0x8B, 0xD0, 0x83, 0xE2, 0x0F);              // mov edx,eax / and edx,0Fh
+		a.Raw(0x80, 0xFA, 0x0A);                          // cmp dl,10
+		a.J8(0x72, "dig");
+		a.Raw(0x80, 0xC2, 0x07);                          // add dl,7
+		a.Mark("dig");
+		a.Raw(0x80, 0xC2, 0x30, 0x88, 0x17, 0x47);        // add dl,'0' / mov [edi],dl / inc edi
+		a.Raw(0x49);                                      // dec ecx
+		a.J8(0x75, "hx");
+		a.Raw(0x5A, 0x59, 0xC3);                          // pop edx / pop ecx / ret
+		// puts: copy the C string at esi to [edi]; keeps ecx/edx
+		uint puts = a.Here;
+		a.Mark("pc");
+		a.Raw(0x8A, 0x06, 0x46, 0x84, 0xC0);              // mov al,[esi] / inc esi / test al,al
+		a.J8(0x74, "pd");
+		a.Raw(0x88, 0x07, 0x47);                          // mov [edi],al / inc edi
+		a.J8(0xEB, "pc");
+		a.Mark("pd");
+		a.Raw(0xC3);
+		// rebase: eax = runtime address -> edx = 1 and eax = original address if it is in this DLL's code, else edx = 0
+		uint rebase = a.Here;
+		a.Raw(0x8B, 0xD0); Ebp(a, 0x2B, 2, RBase);        // mov edx,eax / sub edx,[base]
+		a.Raw(0x81, 0xFA); Imm(a, textStart - ImageBase); a.J8(0x72, "rno");     // cmp edx,.text / jb no
+		a.Raw(0x81, 0xFA); Imm(a, textEnd - ImageBase); a.J8(0x72, "ryes");      // below the end of .text: yes
+		a.Raw(0x81, 0xFA); Imm(a, modStart - ImageBase); a.J8(0x72, "rno");      // the mod's section
+		a.Raw(0x81, 0xFA); Imm(a, modStart - ImageBase + 0x4000); a.J8(0x73, "rno");
+		a.Mark("ryes");
+		a.Raw(0x8D, 0x82); Imm(a, ImageBase);             // lea eax,[edx+10000000h]
+		a.Raw(0xBA, 0x01, 0x00, 0x00, 0x00, 0xC3);        // mov edx,1 / ret
+		a.Mark("rno");
+		a.Raw(0x33, 0xD2, 0xC3);                          // xor edx,edx / ret
+		a.Resolve();
+
+		// stdcall MiniDumpWriteDump(process, pid, file, type, exception info, user streams, callback) -> BOOL
+		uint at = a.Here;
+		a.Raw(0x55, 0x8B, 0xEC);                          // push ebp / mov ebp,esp
+		a.Raw(0x81, 0xEC); Imm(a, 0x1840);                // sub esp,1840h
+		a.Raw(0x60);                                      // pushad
+		a.Raw(0xE8, 0x00, 0x00, 0x00, 0x00);              // call $+5
+		uint popAt = a.Here;
+		a.Raw(0x5B);                                      // pop ebx
+		a.Raw(0x8B, 0xC3, 0x2D); Imm(a, popAt - ImageBase); Ebp(a, 0x89, 0, RBase);   // [base] = ebx - (popAt - image base)
+		Ebp(a, 0x8D, 7, RBuf);                            // lea edi,[buf]
+		Action<string> puts1 = key => { a.Raw(0x8D, 0xB3); Imm(a, str[key] - popAt); a.Call(puts); };   // lea esi,[ebx+s] / call puts
+		Action<string> putsKeepEax = key => { a.Raw(0x50); puts1(key); a.Raw(0x58); };
+		int addrN = 0;
+		// addr: eax -> "XXXXXXXX (empire.retail.dll)" (original address) or "XXXXXXXX (another module...)"
+		Action addr = () => {
+			string oth = "aoth" + addrN, done = "adone" + addrN; addrN++;
+			a.Call(rebase); a.Call(hex8);
+			a.Raw(0x85, 0xD2); a.J8(0x74, oth);           // test edx,edx
+			puts1("dll"); a.J8(0xEB, done);
+			a.Mark(oth); puts1("other");
+			a.Mark(done);
+		};
+		puts1("head");
+		a.Raw(0x8B, 0x45, 0x18);                          // mov eax,[ebp+18h]       (MINIDUMP_EXCEPTION_INFORMATION*)
+		a.Raw(0x85, 0xC0); a.J32("noep", 0x0F, 0x84);
+		a.Raw(0x8B, 0x40, 0x04);                          // mov eax,[eax+4]         (EXCEPTION_POINTERS*)
+		a.Raw(0x85, 0xC0); a.J32("noep", 0x0F, 0x84);
+		Ebp(a, 0x89, 0, REp);
+		Action rec = () => { Ebp(a, 0x8B, 0, REp); a.Raw(0x8B, 0x00); };           // eax = ExceptionRecord
+		Action ctx = () => { Ebp(a, 0x8B, 0, REp); a.Raw(0x8B, 0x40, 0x04); };     // eax = ContextRecord
+		puts1("code"); rec(); a.Raw(0x8B, 0x00); a.Call(hex8);                     // ExceptionCode
+		puts1("at"); rec(); a.Raw(0x8B, 0x40, 0x0C); addr();                       // ExceptionAddress
+		puts1("info"); rec(); a.Raw(0x8B, 0x40, 0x04); a.Call(hex8);               // ExceptionFlags
+		// details: NumberParameters, then ExceptionInformation[0..1] (access violation: 0 read / 1 write / 8 execute, address)
+		puts1("params"); rec(); a.Raw(0x8B, 0x40, 0x10); a.Call(hex8);
+		puts1("sp"); rec(); a.Raw(0x8B, 0x40, 0x14); a.Call(hex8);
+		puts1("sp"); rec(); a.Raw(0x8B, 0x40, 0x18); a.Call(hex8);
+		puts1("base"); Ebp(a, 0x8B, 0, RBase); a.Call(hex8);
+		puts1("orig");
+		for (int i = 0; i < regs.Length; i++) {
+			puts1(regs[i]);
+			ctx(); a.Raw(0x8B, 0x80); Imm(a, regOff[i]);
+			if (i == 0) addr(); else a.Call(hex8);
+		}
+		// the crashing thread's stack: [ctx.Esp, TEB StackBase), only when Esp lies inside this thread's stack
+		ctx(); a.Raw(0x8B, 0x80); Imm(a, 0xC4); Ebp(a, 0x89, 0, RStack);           // [stack] = ctx.Esp
+		a.Raw(0x33, 0xD2);                                // xor edx,edx             (available dwords)
+		a.Raw(0x64, 0x3B, 0x05, 0x08, 0x00, 0x00, 0x00);  // cmp eax,fs:[8]          (StackLimit)
+		a.J8(0x72, "avail");
+		a.Raw(0x64, 0x8B, 0x15, 0x04, 0x00, 0x00, 0x00);  // mov edx,fs:[4]          (StackBase)
+		a.Raw(0x2B, 0xD0);                                // sub edx,eax
+		a.J8(0x73, "pos");
+		a.Raw(0x33, 0xD2);
+		a.Mark("pos");
+		a.Raw(0xC1, 0xEA, 0x02);                          // shr edx,2
+		a.Raw(0x81, 0xFA); Imm(a, 0x1000); a.J8(0x76, "avail");   // at most 4096 dwords
+		a.Raw(0xBA); Imm(a, 0x1000);
+		a.Mark("avail");
+		Ebp(a, 0x89, 2, RAvail);
+		puts1("calls");
+		a.Raw(0x33, 0xC9);                                // xor ecx,ecx
+		Ebp(a, 0xC7, 0, RFound); Imm(a, 0);
+		a.Mark("cs");
+		Ebp(a, 0x3B, 1, RAvail); a.J32("csdone", 0x0F, 0x83);                      // cmp ecx,[avail] / jae
+		Ebp(a, 0x81, 7, RFound); Imm(a, 96); a.J32("csdone", 0x0F, 0x83);          // cmp [found],96 / jae
+		Ebp(a, 0x8B, 0, RStack); a.Raw(0x8B, 0x04, 0x88);                          // mov eax,[stack] / mov eax,[eax+ecx*4]
+		a.Call(rebase);
+		a.Raw(0x85, 0xD2); a.J8(0x74, "csnext");
+		Ebp(a, 0xF6, 0, RFound); a.Raw(0x07);             // test byte [found],7
+		a.J8(0x75, "cssp");
+		putsKeepEax("nl"); a.J8(0xEB, "csw");
+		a.Mark("cssp");
+		putsKeepEax("sp");
+		a.Mark("csw");
+		a.Call(hex8);
+		Ebp(a, 0xFF, 0, RFound);                          // inc dword [found]
+		a.Mark("csnext");
+		a.Raw(0x41); a.J32("cs", 0xE9);                   // inc ecx / jmp cs
+		a.Mark("csdone");
+		// raw stack: the first 128 dwords
+		puts1("stack");
+		a.Raw(0x33, 0xC9);
+		a.Mark("rs");
+		Ebp(a, 0x3B, 1, RAvail); a.J8(0x73, "rsdone");
+		a.Raw(0x81, 0xF9); Imm(a, 128); a.J8(0x73, "rsdone");
+		a.Raw(0xF6, 0xC1, 0x07); a.J8(0x75, "rssp");      // test cl,7
+		puts1("nl"); a.J8(0xEB, "rsw");
+		a.Mark("rssp");
+		puts1("sp");
+		a.Mark("rsw");
+		Ebp(a, 0x8B, 0, RStack); a.Raw(0x8B, 0x04, 0x88); a.Call(hex8);
+		a.Raw(0x41); a.J8(0xEB, "rs");
+		a.Mark("rsdone");
+		puts1("nl");
+		a.J8(0xEB, "text");
+		a.Mark("noep");
+		puts1("noep");
+		a.Mark("text");
+		// length; then the text file
+		Ebp(a, 0x8D, 0, RBuf); a.Raw(0x2B, 0xF8); Ebp(a, 0x89, 7, RLen);           // [len] = edi - buf
+		a.Raw(0x6A, 0x00, 0x68, 0x80, 0x00, 0x00, 0x00, 0x6A, 0x02, 0x6A, 0x00, 0x6A, 0x01);   // 0, NORMAL, CREATE_ALWAYS, 0, SHARE_READ
+		a.Raw(0x68, 0x00, 0x00, 0x00, 0x40);              // GENERIC_WRITE
+		a.Raw(0x8D, 0xB3); Imm(a, str["file"] - popAt); a.Raw(0x56);
+		a.Raw(0x8B, 0x83); Imm(a, CreateFileAIat - popAt); a.Raw(0xFF, 0xD0);
+		a.Raw(0x83, 0xF8, 0xFF); a.J8(0x74, "nofile");
+		a.Raw(0x8B, 0xF0);                                // mov esi,eax
+		a.Raw(0x6A, 0x00);
+		Ebp(a, 0x8D, 1, RWritten); a.Raw(0x51);           // lea ecx,[written] / push ecx
+		Ebp(a, 0xFF, 6, RLen);                            // push [len]
+		Ebp(a, 0x8D, 1, RBuf); a.Raw(0x51);
+		a.Raw(0x56);
+		a.Raw(0x8B, 0x83); Imm(a, WriteFileIat - popAt); a.Raw(0xFF, 0xD0);
+		a.Raw(0x56);
+		a.Raw(0x8B, 0x83); Imm(a, CloseHandleIat - popAt); a.Raw(0xFF, 0xD0);
+		a.Mark("nofile");
+		// the same text as a CommentStreamA (10) in the minidump
+		Ebp(a, 0xC7, 0, RStream); Imm(a, 10);
+		Ebp(a, 0x8B, 0, RLen); Ebp(a, 0x89, 0, RStream + 4);
+		Ebp(a, 0x8D, 0, RBuf); Ebp(a, 0x89, 0, RStream + 8);
+		Ebp(a, 0xC7, 0, RStreamInfo); Imm(a, 1);
+		Ebp(a, 0x8D, 0, RStream); Ebp(a, 0x89, 0, RStreamInfo + 4);
+		a.Raw(0xFF, 0x75, 0x20);                          // push [ebp+20h]          (callback)
+		Ebp(a, 0x8D, 0, RStreamInfo); a.Raw(0x50);        // user streams
+		a.Raw(0xFF, 0x75, 0x18, 0xFF, 0x75, 0x14, 0xFF, 0x75, 0x10, 0xFF, 0x75, 0x0C, 0xFF, 0x75, 0x08);
+		a.Call(MiniDumpThunk);
+		Ebp(a, 0x89, 0, RWritten);                        // keep the result
+		a.Raw(0x61);                                      // popad
+		Ebp(a, 0x8B, 0, RWritten);
+		a.Raw(0x8B, 0xE5, 0x5D, 0xC2, 0x1C, 0x00);        // mov esp,ebp / pop ebp / ret 1Ch
+		a.Resolve();
+		return at;
+	}
+
 	static void ExpectBytes(uint va, params byte[] expected) {
 		int o = VaToOff(va);
 		for (int i = 0; i < expected.Length; i++)
@@ -482,6 +762,17 @@ public static class EightPlayerPatcher {
 		b[o] = 0xE9;
 		Array.Copy(BitConverter.GetBytes((int)(target - (at + 5))), 0, b, o + 1, 4);
 		for (int i = 5; i < patchLen; i++) b[o + i] = 0x90;
+	}
+
+	static void TextRange(out uint start, out uint end) {
+		for (int i = 0; i < nSec; i++) {
+			int sh = secTable + i * 40;
+			if (Encoding.ASCII.GetString(b, sh, 5) != ".text") continue;
+			start = ImageBase + BitConverter.ToUInt32(b, sh + 12);
+			end = start + BitConverter.ToUInt32(b, sh + 8);
+			return;
+		}
+		throw new Exception("no .text section");
 	}
 
 	static void AddSection(string name, List<byte> code) {
@@ -555,6 +846,13 @@ public static class EightPlayerPatcher {
 		RedirectCall(LeaveClearAssign, StrAssignCStr, EmitLeaveClearGuard(s));
 		if (On(1)) { PatchSlotPicker(); PatchStartPlayerCount(); }
 		if (On(128)) PatchCrashDumpType();
+		if (On(256)) PatchFollowBattle();
+		if (On(512)) PatchSideCalls(EmitSideFaction(s));
+		if (On(1024)) {
+			uint textStart, textEnd;
+			TextRange(out textStart, out textEnd);
+			RedirectCall(MiniDumpCall, MiniDumpThunk, EmitCrashReport(s, textStart, textEnd, s.Va));
+		}
 		uint safeVis = EmitSafeSetVisible(s);
 		if (On(8)) RedirectCall(JoinKickVisCall, SetVisible, safeVis);
 		if (On(16)) RedirectCall(LeaveKickVisCall, SetVisible, safeVis);

@@ -41,6 +41,16 @@ $cap = Hex (At 0x111EFED3 6); "capacity pushes : $cap (expected 6A 02 6A 00 6A 0
 $j = Hex (At 0x111FB3B5 5); "join slot test  : $j (expected 83 FD 01 72 04)"; if ($j -ne '83 FD 01 72 04') { $ok = $false }
 $l = Hex (At 0x111FB8EA 3); "leave kick root : $l (expected 8B F3 90)"; if ($l -ne '8B F3 90') { $ok = $false }
 $d = Hex (At 0x100ECD9F 2); "crash dump type : $d (expected 6A 00)"; if ($d -ne '6A 00') { $ok = $false }
+$f = Hex (At 0x107509DC 2); "follow battle   : $f (expected 0F 82)"; if ($f -ne '0F 82') { $ok = $false }
+$f = Hex (At 0x107509F6 6); "follow votes    : $f (expected 90 90 90 90 90 90)"; if ($f -ne '90 90 90 90 90 90') { $ok = $false }
+$f = At 0x107509B0 6; $dest = 0x107509B6 + [BitConverter]::ToInt32($f, 2); "follow AI votes : jne -> {0:X8} (expected 107509FC)" -f $dest; if ($dest -ne 0x107509FC) { $ok = $false }
+# calls that now go into the mod's section: side lookups (5) and the crash report
+foreach ($c in @(0x1074A5A2, 0x1074A5EB, 0x110F0D76, 0x1110FB07, 0x1110FB7F, 0x100ECDA7)) {
+	$ins = At $c 5; $dest = [int64]$c + 5 + [BitConverter]::ToInt32($ins, 1)
+	$in = $ins[0] -eq 0xE8 -and $dest -ge $secVa -and $dest -lt ($secVa + $secLen)
+	"call {0:X8} -> {1:X8} (in section: {2})" -f $c, $dest, $in
+	if (-not $in) { $ok = $false }
+}
 # a relocated original instruction next to a hook: push "panel_player2" must have been fixed up by the loader
 $push = At 0x11225E18 5; $imm = [BitConverter]::ToUInt32($push, 1)
 "relocated push  : imm {0:X8} expected {1:X8}" -f $imm, [uint32](0x118E2FF0 + $delta)
