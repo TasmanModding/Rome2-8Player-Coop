@@ -12,6 +12,7 @@
 //   5. Player leaves: hides the leaving slot's own kick button instead of panel 2's.
 //   6. Kick click: kicked the first non-host player whatever button was pressed; now kicks the player whose panel
 //      holds the clicked button.
+//   7. Crash dumps: the game's crash handler writes a small minidump (threads, stacks, modules) instead of ~68 MB.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -388,6 +389,18 @@ public static class EightPlayerPatcher {
 	// Now the count only has to reach it: cmp eax,[ebx+48h] / je ok -> jae ok.
 	const uint StartPlayerCountTest = 0x10FC4621;
 
+	// ---- 13. small crash dumps ----------------------------------------------------------------------------------------
+	// The game's crash handler (FUN_100ECC80) writes crash_report\<date>.mdmp with MiniDumpWithDataSegs |
+	// MiniDumpWithIndirectlyReferencedMemory (41h): every module's global data, about 68 MB per crash (and its crash
+	// uploader sends that file). MiniDumpNormal (0) keeps the threads, their stacks and the module list - enough to
+	// trace a crash - in well under 1 MB.
+	const uint CrashDumpType = 0x100ECD9F;        // push 41h (MiniDumpWriteDump DumpType)
+
+	static void PatchCrashDumpType() {
+		ExpectBytes(CrashDumpType, 0x6A, 0x41, 0xFF, 0x74, 0x24, 0x24);
+		b[VaToOff(CrashDumpType) + 1] = 0x00;
+	}
+
 	static void PatchStartPlayerCount() {
 		ExpectBytes(StartPlayerCountTest, 0x3B, 0x43, 0x48, 0x74, 0x17);
 		b[VaToOff(StartPlayerCountTest) + 3] = 0x73;
@@ -541,6 +554,7 @@ public static class EightPlayerPatcher {
 		RedirectCall(DropdownSetupCall, DropdownSetup, EmitDropdownGuard(s));
 		RedirectCall(LeaveClearAssign, StrAssignCStr, EmitLeaveClearGuard(s));
 		if (On(1)) { PatchSlotPicker(); PatchStartPlayerCount(); }
+		if (On(128)) PatchCrashDumpType();
 		uint safeVis = EmitSafeSetVisible(s);
 		if (On(8)) RedirectCall(JoinKickVisCall, SetVisible, safeVis);
 		if (On(16)) RedirectCall(LeaveKickVisCall, SetVisible, safeVis);

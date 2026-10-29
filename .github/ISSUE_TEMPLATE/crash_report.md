@@ -5,7 +5,7 @@ title: "[Bug] "
 labels: bug
 ---
 
-**Attach the newest `.mdmp` file** from `%APPDATA%\The Creative Assembly\Rome2\crash_report` of the player who crashed
+**Attach the newest `.mdmp` file** (well under 1 MB since v1.3) from `%APPDATA%\The Creative Assembly\Rome2\crash_report` of the player who crashed
 (paste that path into the Windows Explorer address bar). Drag it into this box (zip it first if GitHub refuses the file type).
 
 - Mod version (v1.x):

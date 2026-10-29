@@ -53,6 +53,12 @@ Verified by a byte-exact round trip of ui\frontend ui\mp_grand_campaign (other l
 - Campaign start check FUN_10FC4530 required joined players == settings+48h (2): changed je -> jae at 10FC4624
   (2..8 players can start). 10F8198E is the same test for party matchmaking (not campaigns), left alone.
 
+## v1.3
+- Crash handler FUN_100ECC80 calls MiniDumpWriteDump (100ECDA7) with DumpType 41h (WithDataSegs |
+  WithIndirectlyReferencedMemory): ~68 MB per crash, which its crash uploader then sends. Changed to 0 (MiniDumpNormal:
+  threads, stacks, modules) at 100ECD9F. The crash_report .stack.txt it also writes only says "unknown"; the .mdmp
+  stack walk (faulting thread's stack -> empire.retail.dll return addresses) is what locates a crash.
+
 ## Not done / next
 - In-campaign behaviour with 3+ humans is untested: co-op alliances between all humans, battle results for
   allies who weren't in the battle, desync handling (handler near 10FD5700 / 10FB5890, kick setting mp_desync_kick_enabled).
